@@ -1,0 +1,19 @@
+#!/system/bin/sh
+# Local-build fallback. CI replaces this asset with the real ARM64 native binary.
+IF=usb0
+case "${1:-status}" in
+  check) echo native=fallback-shell; ip link show dev "$IF" >/dev/null 2>&1 && echo interface=YES || echo interface=NO ;;
+  status) echo NATIVE_INTERFACE=$(ip link show dev "$IF" >/dev/null 2>&1 && echo YES || echo NO); echo LINK=$(cat /sys/class/net/$IF/operstate 2>/dev/null || echo missing); echo CARRIER=$(cat /sys/class/net/$IF/carrier 2>/dev/null || echo -1); IP=$(ip -4 -o addr show dev "$IF" 2>/dev/null | awk '{print $4;exit}'); echo IP=${IP:--}; GW=$(ip route show dev "$IF" 2>/dev/null | awk '/^default via /{print $3;exit}'); echo GW=${GW:--}; T=254; echo TABLE=$T; [ -n "$GW" ] && ping -c 1 -W 2 -I "$IF" "$GW" >/dev/null 2>&1 && echo GWTEST=OK || echo GWTEST=FAIL; ping -c 1 -W 2 -I "$IF" 1.1.1.1 >/dev/null 2>&1 && echo INET=OK || echo INET=FAIL; ping -c 1 -W 4 -I "$IF" google.com >/dev/null 2>&1 && echo DNS=OK || echo DNS=FAIL; [ -n "$GW" ] && echo ROUTE=OK || echo ROUTE=FAIL ;;
+  up) ip link set dev "$IF" up; echo RESULT=$? ;;
+  down) ip link set dev "$IF" down; echo RESULT=$? ;;
+  dhcp) command -v dhcpcd >/dev/null && exec dhcpcd -n "$IF"; command -v udhcpc >/dev/null && exec udhcpc -i "$IF" -q -n -t 3 -T 2; echo DHCP=NONE; exit 127 ;;
+  route) GW=${2:-$(ip route show dev "$IF" | awk '/^default via /{print $3;exit}')}; [ -n "$GW" ] || { echo RESULT=NO_GATEWAY; exit 2; }; ip route replace default via "$GW" dev "$IF"; echo RESULT=$? ;;
+  repair) "$0" up; "$0" route; ip neigh flush dev "$IF" 2>/dev/null || true; echo RESULT=0 ;;
+  reset) "$0" down; sleep 1; "$0" up; "$0" dhcp || true; "$0" route || true; echo RESULT=0 ;;
+  neigh) ip neigh flush dev "$IF"; echo RESULT=$? ;;
+  recover) "$0" repair; "$0" status; echo RESULT=FINISHED ;;
+  test) "$0" status | grep -E 'GWTEST|INET|DNS' ;;
+  diagnose) "$0" status; ip link show dev "$IF" 2>&1; ip -4 addr show dev "$IF" 2>&1; ip rule show 2>&1; ip route show dev "$IF" 2>&1; ip neigh show dev "$IF" 2>&1 ;;
+  snapshot) "$0" status ;;
+  *) echo 'usage: usb0-native {check|status|up|down|dhcp|route|repair|reset|neigh|recover|test|diagnose|snapshot}'; exit 2 ;;
+esac

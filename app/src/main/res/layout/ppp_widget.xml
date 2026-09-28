@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <TextView
+        android:id="@+id/ppp_widget_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="USB0 PPP"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/ppp_widget_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Checking…"
+        android:textSize="11sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/ppp_widget_connect"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="Connect"
+            android:textSize="9sp" />
+
+        <Button
+            android:id="@+id/ppp_widget_disconnect"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="Stop"
+            android:textSize="9sp" />
+
+        <Button
+            android:id="@+id/ppp_widget_settings"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="Setup"
+            android:textSize="9sp" />
+    </LinearLayout>
+</LinearLayout>

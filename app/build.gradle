@@ -1,0 +1,63 @@
+plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
+
+android {
+    namespace 'com.r36s.usb0manager'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.r36s.usb0manager'
+        minSdk 30
+        targetSdk 30
+        versionCode 11
+        versionName '1.9.0'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    buildFeatures { buildConfig true }
+
+    signingConfigs {
+        if (project.hasProperty('RELEASE_STORE_FILE')) {
+            release {
+                storeFile = file(project.property('RELEASE_STORE_FILE'))
+                storePassword = project.findProperty('RELEASE_STORE_PASSWORD') ?: ''
+                keyAlias = project.findProperty('RELEASE_KEY_ALIAS') ?: 'usb0'
+                keyPassword = project.findProperty('RELEASE_KEY_PASSWORD') ?: ''
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (project.hasProperty('RELEASE_STORE_FILE')) {
+                signingConfig = signingConfigs.release
+            }
+            minifyEnabled false
+        }
+    }
+
+    packaging { resources { excludes += ['META-INF/LICENSE*', 'META-INF/NOTICE*'] } }
+}
+
+tasks.register("prepareArm64Tools") {
+    doLast {
+        [
+            file("src/main/assets/tools/arm64-v8a/usb0-helper"),
+            file("src/main/assets/tools/arm64-v8a/usb0-helper.sh"),
+            file("src/main/assets/tools/arm64-v8a/usb0-native"),
+            file("src/main/assets/tools/arm64-v8a/busybox"),
+            file("src/main/assets/tools/arm64-v8a/pppd"),
+            file("src/main/assets/tools/arm64-v8a/chat")
+        ].each { f -> if (!f.exists()) throw new GradleException("Missing bundled tool: ${f}") }
+    }
+}
+preBuild.dependsOn("prepareArm64Tools")
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+}

@@ -1,0 +1,8 @@
+USB0 Manager bundles BusyBox for private recovery/diagnostic use.
+
+BusyBox version: 1.37.0
+Source: https://busybox.net/downloads/busybox-1.37.0.tar.bz2
+License: GNU General Public License version 2 (GPLv2)
+
+The GitHub Actions build downloads the pinned source archive and builds the
+ARM64 Android binary included in the APK.
