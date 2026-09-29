@@ -120,7 +120,6 @@ jobs:
 
             unzip -q "${ZIP}" -d "${EXTRACT}"
 
-            # FIX: Search for source.properties which is at depth 2, not clang which is at depth 7.
             FOUND="$(find "${EXTRACT}" -maxdepth 2 -type f -name source.properties | head -n 1 || true)"
 
             if [ -z "${FOUND}" ]; then
@@ -302,7 +301,9 @@ jobs:
             ca-certificates \
             unzip \
             gzip \
-            tar
+            tar \
+            bison \
+            flex
 
       - name: Build Android ARM64 PPPD and chat
         shell: bash
@@ -330,19 +331,16 @@ jobs:
           TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
 
           CC="${TOOLCHAIN}/aarch64-linux-android30-clang"
+          CXX="${TOOLCHAIN}/aarch64-linux-android30-clang++"
           AR="${TOOLCHAIN}/llvm-ar"
           RANLIB="${TOOLCHAIN}/llvm-ranlib"
           STRIP="${TOOLCHAIN}/llvm-strip"
           READELF="${TOOLCHAIN}/llvm-readelf"
 
-          export CC
-          export AR
-          export RANLIB
-
-          export CFLAGS="-O2 -fPIE -fstack-protector-strong -DANDROID -D__ANDROID_API__=30 -D_GNU_SOURCE=1"
+          # Fix for Clang 18 (NDK r27) rejecting older Autoconf implicit tests
+          export CFLAGS="-O2 -fstack-protector-strong -DANDROID -D__ANDROID_API__=30 -D_GNU_SOURCE=1 -Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=int-conversion"
           export CPPFLAGS="${CFLAGS}"
-          export LDFLAGS="-pie"
-          export LIBS=""
+          export LDFLAGS=""
 
           rm -rf "${WORK}"
           mkdir -p "${WORK}" "${OUT}"
@@ -394,7 +392,7 @@ jobs:
 
               s = s.replace(
                   "#include <utmp.h>",
-                  "#if !defined(__ANDROID__)\\n#include <utmp.h>\\n#endif",
+                  "#if !defined(__ANDROID__)\n#include <utmp.h>\n#endif",
               )
 
               p.write_text(s)
@@ -402,6 +400,7 @@ jobs:
 
           rm -f config.cache
 
+          # Pass CC, CFLAGS natively into configure
           ac_cv_func_logwtmp=no \
           ac_cv_lib_util_logwtmp=no \
           ac_cv_header_utmp_h=no \
@@ -417,7 +416,14 @@ jobs:
             --without-openssl \
             --without-pam \
             --without-pcap \
-            --without-atm
+            --without-atm \
+            CC="${CC}" \
+            CXX="${CXX}" \
+            AR="${AR}" \
+            RANLIB="${RANLIB}" \
+            CFLAGS="${CFLAGS}" \
+            CPPFLAGS="${CPPFLAGS}" \
+            LDFLAGS="${LDFLAGS}"
 
           echo
           echo "Building PPPD..."
@@ -428,12 +434,6 @@ jobs:
 
           make -C pppd \
             -j"$(nproc)" \
-            CC="${CC}" \
-            AR="${AR}" \
-            RANLIB="${RANLIB}" \
-            CFLAGS="${CFLAGS}" \
-            CPPFLAGS="${CPPFLAGS}" \
-            LDFLAGS="${LDFLAGS}" \
             V=1 \
             2>&1 | tee "${LOG}"
 
@@ -458,11 +458,7 @@ jobs:
           echo "Building chat..."
 
           make -C chat \
-            -j"$(nproc)" \
-            CC="${CC}" \
-            CFLAGS="${CFLAGS}" \
-            CPPFLAGS="${CPPFLAGS}" \
-            LDFLAGS="${LDFLAGS}"
+            -j"$(nproc)"
 
           test -s pppd/pppd
           test -s chat/chat
