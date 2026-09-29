@@ -37,7 +37,7 @@ jobs:
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
         with:
           packages: "platform-tools platforms;android-35 build-tools;35.0.0"
 
@@ -120,15 +120,16 @@ jobs:
 
             unzip -q "${ZIP}" -d "${EXTRACT}"
 
-            FOUND="$(find "${EXTRACT}" -maxdepth 2 -type f -name clang | head -n 1 || true)"
+            # FIX: Search for source.properties which is at depth 2, not clang which is at depth 7.
+            FOUND="$(find "${EXTRACT}" -maxdepth 2 -type f -name source.properties | head -n 1 || true)"
 
             if [ -z "${FOUND}" ]; then
-              echo "ERROR: NDK clang not found after extraction."
+              echo "ERROR: NDK source.properties not found after extraction."
               find "${EXTRACT}" -maxdepth 3 -type f | head -n 100
               exit 1
             fi
 
-            NDK_TOP="$(dirname "$(dirname "$(dirname "$(dirname "${FOUND}")")")")"
+            NDK_TOP="$(dirname "${FOUND}")"
 
             if [ ! -d "${NDK_TOP}" ]; then
               echo "ERROR: Could not determine NDK directory."
