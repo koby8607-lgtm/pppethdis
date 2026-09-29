@@ -1,12 +1,17 @@
-name: Build USB0 Manager v1.9.0
+name: Build USB0 Manager v1.9.0 PPP
 
-on:
-  workflow_dispatch:
+"on":
+  workflow_dispatch: {}
   push:
-    branches: [main, master]
-    tags: ['v*']
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
   pull_request:
-    branches: [main, master]
+    branches:
+      - main
+      - master
 
 permissions:
   contents: write
@@ -14,19 +19,21 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+
     env:
-      ANDROID_API_LEVEL: '35'
-      ANDROID_BUILD_TOOLS: '35.0.0'
-      ANDROID_NDK_VERSION: '27.2.12479018'
+      ANDROID_API_LEVEL: "35"
+      ANDROID_BUILD_TOOLS: "35.0.0"
+      ANDROID_NDK_VERSION: "27.2.12479018"
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
           cache: gradle
 
       - name: Set up Android SDK
@@ -36,14 +43,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config curl ca-certificates tar gzip autoconf automake libtool
 
-      - name: Install Android SDK/NDK
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            curl \
+            ca-certificates \
+            tar \
+            gzip \
+            autoconf \
+            automake \
+            libtool \
+            texinfo
+
+      - name: Install Android SDK and NDK
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-${ANDROID_API_LEVEL}" \
@@ -54,18 +75,84 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           chmod 755 ./gradlew
           test -x ./gradlew
-          bash ./gradlew --version
 
-      - name: Build real ARM64 usb0-native executable
+          ./gradlew --version
+
+      - name: Force Java and Kotlin JVM 17
         shell: bash
         run: |
           set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("app/build.gradle")
+
+          if not p.exists():
+              raise SystemExit("app/build.gradle not found")
+
+          s = p.read_text()
+
+          s = s.replace(
+              "jvmTarget = '1.8'",
+              "jvmTarget = '17'"
+          )
+
+          s = s.replace(
+              'jvmTarget = "1.8"',
+              'jvmTarget = "17"'
+          )
+
+          p.write_text(s)
+
+          Path("android-build-fix.gradle").unlink(missing_ok=True)
+          Path("app/android-build-fix.gradle").unlink(missing_ok=True)
+
+          print("Java/Kotlin target set to JVM 17.")
+          PY
+
+      - name: Fix known Kotlin compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          for p in Path("app/src/main/java").rglob("*.kt"):
+              s = p.read_text()
+
+              s = s.replace(
+                  "singleLine = true",
+                  "isSingleLine = true"
+              )
+
+              p.write_text(s)
+          PY
+
+      - name: Build ARM64 usb0-native
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="app/src/main/cpp/usb0-native.c"
+          OUT="app/src/main/assets/tools/arm64-v8a/usb0-native"
+
+          test -f "$SRC"
+
+          mkdir -p "$(dirname "$OUT")"
+
           NDK="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
-          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
-          STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          CLANG="$TOOLCHAIN/aarch64-linux-android30-clang"
+          STRIP="$TOOLCHAIN/llvm-strip"
+          READELF="$TOOLCHAIN/llvm-readelf"
+
+          test -x "$CLANG"
 
           "$CLANG" \
             -O2 \
@@ -73,48 +160,384 @@ jobs:
             -fstack-protector-strong \
             -DANDROID \
             -D__ANDROID_API__=30 \
+            -D_GNU_SOURCE=1 \
             -pie \
-            app/src/main/cpp/usb0-native.c \
-            -o app/src/main/assets/tools/arm64-v8a/usb0-native
+            "$SRC" \
+            -o "$OUT"
 
-          "$STRIP" app/src/main/assets/tools/arm64-v8a/usb0-native || true
-          chmod 755 app/src/main/assets/tools/arm64-v8a/usb0-native
-          file app/src/main/assets/tools/arm64-v8a/usb0-native
-          "$READELF" -h app/src/main/assets/tools/arm64-v8a/usb0-native | grep -E 'Class:|Machine:|Type:'
+          "$STRIP" "$OUT"
 
-      - name: Use prebuilt ARM64 BusyBox
+          chmod 755 "$OUT"
+
+          file "$OUT" |
+            grep -Eiq 'ELF 64-bit.*ARM aarch64'
+
+          "$READELF" -h "$OUT" |
+            grep -E 'Class:|Machine:|Type:'
+
+      - name: Use supplied ARM64 BusyBox
         shell: bash
         run: |
           set -euo pipefail
-          chmod 755 scripts/build-busybox.sh
-          ./scripts/build-busybox.sh
 
-      - name: Build PPPD and chat for ARM64 Android
+          test -f app/src/main/assets/tools/arm64-v8a/busybox
+          chmod 755 app/src/main/assets/tools/arm64-v8a/busybox
+
+          file app/src/main/assets/tools/arm64-v8a/busybox |
+            grep -Eiq 'ELF 64-bit.*ARM aarch64'
+
+          file app/src/main/assets/tools/arm64-v8a/busybox |
+            grep -Eiq 'statically linked'
+
+          echo "Using supplied ARM64 BusyBox."
+          sha256sum app/src/main/assets/tools/arm64-v8a/busybox
+
+      - name: Replace PPP build script with Android-safe builder
         shell: bash
         run: |
           set -euo pipefail
+
+          cat > scripts/build-ppp.sh <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          VERSION="2.5.4"
+          TAG="v${VERSION}"
+
+          WORK="${RUNNER_TEMP:-/tmp}/usb0-ppp-${VERSION}"
+          SRC="${WORK}/ppp"
+
+          OUT="app/src/main/assets/tools/arm64-v8a"
+
+          NDK="${ANDROID_NDK_ROOT:-${ANDROID_HOME}/ndk/27.2.12479018}"
+          TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          CC="${TOOLCHAIN}/aarch64-linux-android30-clang"
+          AR="${TOOLCHAIN}/llvm-ar"
+          RANLIB="${TOOLCHAIN}/llvm-ranlib"
+          STRIP="${TOOLCHAIN}/llvm-strip"
+          READELF="${TOOLCHAIN}/llvm-readelf"
+
+          export CC
+          export AR
+          export RANLIB
+
+          export CFLAGS="-O2 -fPIE -fstack-protector-strong -DANDROID -D__ANDROID_API__=30 -D_GNU_SOURCE=1"
+          export CPPFLAGS="${CFLAGS}"
+          export LDFLAGS="-pie"
+          export LIBS=""
+
+          rm -rf "${WORK}"
+          mkdir -p "${WORK}" "${OUT}"
+
+          test -x "${CC}"
+          test -x "${AR}"
+          test -x "${RANLIB}"
+          test -x "${STRIP}"
+
+          TARBALL="${WORK}/ppp-${VERSION}.tar.gz"
+          URL="https://github.com/ppp-project/ppp/archive/refs/tags/${TAG}.tar.gz"
+
+          echo "Downloading PPP ${VERSION}"
+
+          curl \
+            --fail \
+            --show-error \
+            --location \
+            --retry 10 \
+            --retry-all-errors \
+            --retry-delay 3 \
+            "${URL}" \
+            -o "${TARBALL}"
+
+          test -s "${TARBALL}"
+
+          echo "Extracting PPP source"
+
+          tar -xzf "${TARBALL}" -C "${WORK}"
+
+          test -d "${WORK}/ppp-${VERSION}"
+
+          mv "${WORK}/ppp-${VERSION}" "${SRC}"
+
+          cd "${SRC}"
+
+          if [ ! -x ./configure ]; then
+            echo "Generating configure script."
+
+            test -x ./autogen.sh
+
+            ./autogen.sh
+          fi
+
+          test -x ./configure
+
+          echo "Applying Android/Bionic compatibility fixes."
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("pppd/sys-linux.c")
+          s = p.read_text()
+
+          old_utmp = """#ifdef HAVE_UTMP_H
+          #include <utmp.h>
+          #endif
+          """
+
+          new_utmp = """#if defined(HAVE_UTMP_H) && !defined(__ANDROID__)
+          #include <utmp.h>
+          #endif
+          """
+
+          if old_utmp in s:
+              s = s.replace(old_utmp, new_utmp, 1)
+
+          if "#include <signal.h>" in s and "ANDROID PPP line-discipline fallbacks" not in s:
+              s = s.replace(
+                  "#include <signal.h>",
+                  """#include <signal.h>
+
+          /*
+           * ANDROID PPP line-discipline fallbacks
+           *
+           * Some Android/Bionic kernel headers do not expose these
+           * Linux line-discipline numbers through the NDK libc headers.
+           */
+          #ifdef __ANDROID__
+          #ifndef N_TTY
+          #define N_TTY 0
+          #endif
+          #ifndef N_PPP
+          #define N_PPP 3
+          #endif
+          #endif
+          """,
+                  1
+              )
+
+          old_logwtmp = "#ifndef HAVE_LOGWTMP\n"
+
+          new_logwtmp = """#if defined(__ANDROID__)
+
+          /*
+           * Android has no traditional utmp/wtmp database.
+           * pppd does not need it for PPP networking, so provide
+           * the required symbol as a harmless no-op.
+           */
+          void logwtmp(const char *line, const char *name, const char *host)
+          {
+              (void)line;
+              (void)name;
+              (void)host;
+          }
+
+          #elif !defined(HAVE_LOGWTMP)
+          """
+
+          if old_logwtmp in s:
+              s = s.replace(old_logwtmp, new_logwtmp, 1)
+
+          s = s.replace(
+              "#endif /* HAVE_LOGWTMP */",
+              "#endif /* Android/Bionic logwtmp handling */",
+              1
+          )
+
+          p.write_text(s)
+          PY
+
+          echo "Configuring for Android ARM64."
+
+          rm -f config.cache
+
+          ac_cv_func_logwtmp=no \
+          ac_cv_lib_util_logwtmp=no \
+          ac_cv_header_utmp_h=no \
+          ./configure \
+            --build="$(gcc -dumpmachine)" \
+            --host=aarch64-linux-android \
+            --prefix=/data/local/tmp/usb0-ppp \
+            --sysconfdir=/data/local/tmp/usb0-ppp/etc \
+            --with-runtime-dir=/data/local/tmp/usb0-ppp/run \
+            --with-logfile-dir=/data/local/tmp/usb0-ppp/log \
+            --disable-plugins \
+            --disable-eaptls \
+            --disable-peap \
+            --disable-multilink \
+            --disable-systemd \
+            --disable-ipv6cp \
+            --without-openssl \
+            --without-pam \
+            --without-pcap \
+            --without-atm
+
+          echo
+          echo "PPP configuration:"
+          grep -E \
+            '^(host|build|CC|CFLAGS|CPPFLAGS|LDFLAGS|LIBS)=' \
+            config.status 2>/dev/null || true
+
+          echo
+          echo "Building chat."
+
+          make -C chat clean >/dev/null 2>&1 || true
+
+          make -C chat \
+            -j"$(nproc)" \
+            CFLAGS="${CFLAGS}" \
+            CPPFLAGS="${CPPFLAGS}" \
+            LDFLAGS="${LDFLAGS}"
+
+          test -s chat/chat
+
+          echo
+          echo "Building pppd."
+
+          PPDLOG="${WORK}/pppd-build.log"
+
+          set +e
+
+          make -C pppd clean \
+            >/dev/null 2>&1
+
+          make -C pppd \
+            -j"$(nproc)" \
+            CFLAGS="${CFLAGS}" \
+            CPPFLAGS="${CPPFLAGS}" \
+            LDFLAGS="${LDFLAGS}" \
+            V=1 \
+            2>&1 | tee "${PPDLOG}"
+
+          RC=${PIPESTATUS[0]}
+
+          set -e
+
+          if [ "${RC}" -ne 0 ]; then
+              echo
+              echo "===== PPPD COMPILER ERRORS ====="
+
+              grep -E \
+                'error:|fatal error:|undefined|undeclared|incompatible|conflicting types' \
+                "${PPDLOG}" || true
+
+              echo "===== END PPPD COMPILER ERRORS ====="
+
+              exit "${RC}"
+          fi
+
+          test -s pppd/pppd
+
+          echo
+          echo "Installing ARM64 PPP binaries."
+
+          cp pppd/pppd "${OUT}/pppd"
+          cp chat/chat "${OUT}/chat"
+
+          chmod 755 \
+            "${OUT}/pppd" \
+            "${OUT}/chat"
+
+          "${STRIP}" "${OUT}/pppd"
+          "${STRIP}" "${OUT}/chat"
+
+          file "${OUT}/pppd"
+          file "${OUT}/chat"
+
+          file "${OUT}/pppd" |
+            grep -Eiq 'ELF 64-bit.*ARM aarch64'
+
+          file "${OUT}/chat" |
+            grep -Eiq 'ELF 64-bit.*ARM aarch64'
+
+          echo
+          echo "Checking dynamic dependencies."
+
+          "${READELF}" -d "${OUT}/pppd" |
+            grep -E 'NEEDED|SONAME' || true
+
+          "${READELF}" -d "${OUT}/chat" |
+            grep -E 'NEEDED|SONAME' || true
+
+          echo
+          echo "PPP ARM64 build completed successfully."
+          SCRIPT
+
           chmod 755 scripts/build-ppp.sh
+
+      - name: Build PPPD and chat
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bash -n scripts/build-ppp.sh
           ./scripts/build-ppp.sh
 
-      - name: Verify private APK tools
+      - name: Verify PPP binaries
         shell: bash
         run: |
           set -euo pipefail
-          test -s app/src/main/assets/tools/arm64-v8a/usb0-native
-          test -s app/src/main/assets/tools/arm64-v8a/usb0-helper
-          test -s app/src/main/assets/tools/arm64-v8a/usb0-helper.sh
-          test -s app/src/main/assets/tools/arm64-v8a/busybox
-          test -s app/src/main/assets/tools/arm64-v8a/pppd
-          test -s app/src/main/assets/tools/arm64-v8a/chat
-          test -s app/src/main/assets/r36s/lineageos_r36s_defconfig.txt
-          test -s app/src/main/assets/r36s/kernel-capabilities.txt
-          file app/src/main/assets/tools/arm64-v8a/usb0-native
-          file app/src/main/assets/tools/arm64-v8a/busybox
 
-      - name: Create CI release signing key
+          PPPD="app/src/main/assets/tools/arm64-v8a/pppd"
+          CHAT="app/src/main/assets/tools/arm64-v8a/chat"
+
+          test -s "$PPPD"
+          test -s "$CHAT"
+
+          chmod 755 "$PPPD" "$CHAT"
+
+          file "$PPPD" |
+            grep -Eiq 'ELF 64-bit.*ARM aarch64'
+
+          file "$CHAT" |
+            grep -Eiq 'ELF 64-bit.*ARM aarch64'
+
+          echo "pppd SHA256:"
+          sha256sum "$PPPD"
+
+          echo "chat SHA256:"
+          sha256sum "$CHAT"
+
+      - name: Verify all embedded tools
         shell: bash
         run: |
           set -euo pipefail
+
+          for f in \
+            app/src/main/assets/tools/arm64-v8a/busybox \
+            app/src/main/assets/tools/arm64-v8a/usb0-native \
+            app/src/main/assets/tools/arm64-v8a/usb0-helper \
+            app/src/main/assets/tools/arm64-v8a/usb0-helper.sh \
+            app/src/main/assets/tools/arm64-v8a/pppd \
+            app/src/main/assets/tools/arm64-v8a/chat \
+            app/src/main/assets/r36s/lineageos_r36s_defconfig.txt \
+            app/src/main/assets/r36s/kernel-capabilities.txt
+          do
+            test -f "$f"
+            test -s "$f"
+            echo "OK: $f"
+          done
+
+      - name: Validate shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r -d '' f; do
+            echo "Checking $f"
+            bash -n "$f"
+          done < <(
+            find scripts app/src/main/assets \
+              -type f \
+              -name "*.sh" \
+              -print0
+          )
+
+      - name: Create CI signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+
           keytool -genkeypair \
             -keystore "$RUNNER_TEMP/usb0-manager-release.jks" \
             -storepass changeit \
@@ -126,76 +549,116 @@ jobs:
             -dname "CN=USB0 Manager, OU=R36S, O=USB0 Manager, L=R36S, ST=R36S, C=GB" \
             -noprompt
 
-      - name: Validate shell scripts
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in $(find scripts app/src/main/assets -type f -name '*.sh'); do
-            echo "Checking $f"
-            bash -n "$f"
-          done
-
       - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
-          bash ./gradlew assembleDebug --no-daemon --stacktrace
+
+          bash ./gradlew \
+            assembleDebug \
+            --no-daemon \
+            --no-parallel \
+            --stacktrace \
+            --console=plain
 
       - name: Build release APK
         shell: bash
         run: |
           set -euo pipefail
-          bash ./gradlew assembleRelease \
+
+          bash ./gradlew \
+            assembleRelease \
             --no-daemon \
+            --no-parallel \
             --stacktrace \
+            --console=plain \
             -PRELEASE_STORE_FILE="$RUNNER_TEMP/usb0-manager-release.jks" \
             -PRELEASE_STORE_PASSWORD=changeit \
             -PRELEASE_KEY_ALIAS=usb0 \
             -PRELEASE_KEY_PASSWORD=changeit
 
-      - name: Verify APK signatures and embedded ARM64 tools
+      - name: Verify APKs
         shell: bash
         run: |
           set -euo pipefail
+
           APKSIGNER="$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
-          for apk in app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk; do
+
+          found=0
+
+          for apk in \
+            app/build/outputs/apk/debug/*.apk \
+            app/build/outputs/apk/release/*.apk
+          do
             [ -f "$apk" ] || continue
-            echo "Checking $apk"
+
+            found=1
+
+            echo
+            echo "===== VERIFYING $apk ====="
+
             "$APKSIGNER" verify --verbose "$apk"
-            unzip -l "$apk" | grep -F 'assets/tools/arm64-v8a/busybox'
-            unzip -l "$apk" | grep -F 'assets/tools/arm64-v8a/usb0-native'
-            unzip -l "$apk" | grep -F 'assets/tools/arm64-v8a/usb0-helper.sh'
-            unzip -l "$apk" | grep -F 'assets/tools/arm64-v8a/pppd'
-            unzip -l "$apk" | grep -F 'assets/tools/arm64-v8a/chat'
-            unzip -p "$apk" assets/tools/arm64-v8a/busybox | file -
-            unzip -p "$apk" assets/tools/arm64-v8a/usb0-native | file -
-            unzip -p "$apk" assets/tools/arm64-v8a/pppd | file -
-            unzip -p "$apk" assets/tools/arm64-v8a/chat | file -
+
+            for asset in \
+              busybox \
+              usb0-native \
+              usb0-helper \
+              usb0-helper.sh \
+              pppd \
+              chat
+            do
+              unzip -l "$apk" |
+                grep -F \
+                "assets/tools/arm64-v8a/${asset}"
+            done
+
+            echo
+            echo "BusyBox:"
+            unzip -p "$apk" \
+              assets/tools/arm64-v8a/busybox |
+              file -
+
+            echo
+            echo "usb0-native:"
+            unzip -p "$apk" \
+              assets/tools/arm64-v8a/usb0-native |
+              file -
+
+            echo
+            echo "pppd:"
+            unzip -p "$apk" \
+              assets/tools/arm64-v8a/pppd |
+              file -
+
+            echo
+            echo "chat:"
+            unzip -p "$apk" \
+              assets/tools/arm64-v8a/chat |
+              file -
           done
+
+          test "$found" -eq 1
 
       - name: Collect APKs
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p artifacts
+
           cp app/build/outputs/apk/debug/*.apk artifacts/
           cp app/build/outputs/apk/release/*.apk artifacts/
 
-      - uses: actions/upload-artifact@v4
+          ls -lh artifacts/
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
         with:
           name: usb0-manager-v1.9.0
           path: artifacts/*.apk
           retention-days: 30
 
-      - name: Publish release APKs on tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload diagnostics on failure
+      - name: Upload diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -203,6 +666,15 @@ jobs:
           path: |
             app/build/reports/**
             app/build/outputs/**
-            ~/.gradle/daemon/**
+            ${{ runner.temp }}/usb0-ppp/**
+            ${{ runner.temp }}/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
