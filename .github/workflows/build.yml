@@ -39,7 +39,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 cmake:3.22.1"
 
       - name: Prepare Android SDK licenses
         shell: bash
@@ -293,80 +293,29 @@ jobs:
 
           sudo apt-get install -y \
             build-essential \
-            autoconf \
-            automake \
-            libtool \
-            pkg-config \
+            cmake \
+            ninja-build \
             curl \
             ca-certificates \
             unzip \
             gzip \
-            tar \
-            bison \
-            flex
+            tar
 
-      - name: Build Android ARM64 PPPD and chat
+      - name: Build Android ARM64 PPPD and chat via CMake
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p app/src/main/assets/tools/arm64-v8a
-
-          if [ -f scripts/build-ppp.sh ]; then
-            chmod 755 scripts/build-ppp.sh
-          fi
-
-          cat > scripts/build-ppp.sh <<'SCRIPT'
-          #!/usr/bin/env bash
-          set -euo pipefail
+          OUT="$(pwd)/app/src/main/assets/tools/arm64-v8a"
+          mkdir -p "${OUT}"
 
           VERSION="2.5.4"
           WORK="${RUNNER_TEMP}/usb0-ppp-${VERSION}"
           ARCHIVE="${WORK}/ppp-${VERSION}.tar.gz"
           SRC="${WORK}/ppp"
 
-          OUT="$(pwd)/app/src/main/assets/tools/arm64-v8a"
-
-          NDK="${ANDROID_NDK_ROOT}"
-          TOOLCHAIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-
-          CC="${TOOLCHAIN}/aarch64-linux-android30-clang"
-          CXX="${TOOLCHAIN}/aarch64-linux-android30-clang++"
-          AR="${TOOLCHAIN}/llvm-ar"
-          RANLIB="${TOOLCHAIN}/llvm-ranlib"
-          STRIP="${TOOLCHAIN}/llvm-strip"
-          READELF="${TOOLCHAIN}/llvm-readelf"
-
           rm -rf "${WORK}"
-          mkdir -p "${WORK}" "${OUT}"
-
-          # Create global compatibility headers for Android Bionic
-          mkdir -p "${WORK}/myinc"
-          touch "${WORK}/myinc/utmp.h"
-          touch "${WORK}/myinc/utmpx.h"
-          touch "${WORK}/myinc/crypt.h"
-          touch "${WORK}/myinc/features.h"
-          touch "${WORK}/myinc/wordexp.h"
-
-          cat > "${WORK}/myinc/android_compat.h" <<'EOF'
-          #ifndef _ANDROID_COMPAT_H
-          #define _ANDROID_COMPAT_H
-          #include <string.h>
-          #ifndef bcopy
-          #define bcopy(s,d,n) memmove(d,s,n)
-          #endif
-          #ifndef bzero
-          #define bzero(s,n) memset(s,0,n)
-          #endif
-          #ifndef bcmp
-          #define bcmp(s1,s2,n) memcmp(s1,s2,n)
-          #endif
-          #endif
-          EOF
-
-          export CFLAGS="-O2 -fPIE -fstack-protector-strong -DANDROID -D__ANDROID_API__=30 -D_GNU_SOURCE=1 -w -I${WORK}/myinc -include ${WORK}/myinc/android_compat.h"
-          export CPPFLAGS="${CFLAGS}"
-          export LDFLAGS="-pie"
+          mkdir -p "${WORK}"
 
           URL="https://github.com/ppp-project/ppp/archive/refs/tags/v${VERSION}.tar.gz"
 
@@ -381,88 +330,51 @@ jobs:
             -o "${ARCHIVE}"
 
           test -s "${ARCHIVE}"
-
-          tar -tzf "${ARCHIVE}" >/dev/null
-
           tar -xzf "${ARCHIVE}" -C "${WORK}"
 
           FOUND_DIR="$(find "${WORK}" -mindepth 1 -maxdepth 1 -type d -name 'ppp-*' | head -n 1)"
-
-          if [ -z "${FOUND_DIR}" ]; then
-            echo "PPP source directory not found."
-            exit 1
-          fi
-
           mv "${FOUND_DIR}" "${SRC}"
           cd "${SRC}"
 
-          if [ ! -x ./configure ]; then
-            ./autogen.sh
-          fi
+          # Create build directory and run CMake with official Android NDK toolchain
+          mkdir -p build && cd build
 
-          rm -f config.cache
+          cmake .. \
+            -G "Ninja" \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-30 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_PLUGINS=OFF \
+            -DENABLE_EAPTLS=OFF \
+            -DENABLE_PEAP=OFF \
+            -DUSE_OPENSSL=OFF \
+            -DUSE_PAM=OFF \
+            -DUSE_PCAP=OFF
 
-          # Pre-seed cross-compilation variables to prevent execution checks from failing (Exit 77)
-          ac_cv_prog_cc_works=yes \
-          ac_cv_prog_cxx_works=yes \
-          ac_cv_c_compiler_gnu=yes \
-          ac_cv_cxx_compiler_gnu=yes \
-          ac_cv_func_logwtmp=no \
-          ac_cv_lib_util_logwtmp=no \
-          ac_cv_header_utmp_h=no \
-          ./configure \
-            --build="$(gcc -dumpmachine)" \
-            --host=aarch64-linux-android \
-            --prefix=/data/local/tmp/usb0-ppp \
-            --sysconfdir=/data/local/tmp/usb0-ppp/etc \
-            --disable-plugins \
-            --disable-eaptls \
-            --disable-peap \
-            --disable-systemd \
-            --without-openssl \
-            --without-pam \
-            --without-pcap \
-            --without-atm \
-            CC="${CC}" \
-            CXX="${CXX}" \
-            AR="${AR}" \
-            RANLIB="${RANLIB}" \
-            CFLAGS="${CFLAGS}" \
-            CPPFLAGS="${CPPFLAGS}" \
-            LDFLAGS="${LDFLAGS}"
+          cmake --build . --parallel "$(nproc)"
 
-          echo
-          echo "Building PPPD..."
-          make -C pppd -j"$(nproc)" V=1
+          # Locate built binaries
+          PPPD_BIN="$(find . -type f -name pppd | head -n 1)"
+          CHAT_BIN="$(find . -type f -name chat | head -n 1)"
 
-          echo
-          echo "Building chat..."
-          make -C chat -j"$(nproc)" V=1
+          test -s "${PPPD_BIN}"
+          test -s "${CHAT_BIN}"
 
-          test -s pppd/pppd
-          test -s chat/chat
+          cp "${PPPD_BIN}" "${OUT}/pppd"
+          cp "${CHAT_BIN}" "${OUT}/chat"
 
-          cp pppd/pppd "${OUT}/pppd"
-          cp chat/chat "${OUT}/chat"
+          TOOLCHAIN="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          STRIP="${TOOLCHAIN}/llvm-strip"
 
           chmod 755 "${OUT}/pppd" "${OUT}/chat"
-
           "${STRIP}" "${OUT}/pppd"
           "${STRIP}" "${OUT}/chat"
-
-          file "${OUT}/pppd"
-          file "${OUT}/chat"
 
           file "${OUT}/pppd" | grep -Eiq 'ELF 64-bit.*ARM aarch64'
           file "${OUT}/chat" | grep -Eiq 'ELF 64-bit.*ARM aarch64'
 
-          echo
-          echo "PPPD and chat built successfully."
-          SCRIPT
-
-          chmod 755 scripts/build-ppp.sh
-          bash -n scripts/build-ppp.sh
-          ./scripts/build-ppp.sh
+          echo "PPPD and chat built successfully via CMake."
 
       - name: Verify PPP binaries
         shell: bash
