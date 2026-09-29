@@ -364,7 +364,6 @@ jobs:
           #endif
           EOF
 
-          # -w suppresses all warnings preventing them from being escalated to errors
           export CFLAGS="-O2 -fPIE -fstack-protector-strong -DANDROID -D__ANDROID_API__=30 -D_GNU_SOURCE=1 -w -I${WORK}/myinc -include ${WORK}/myinc/android_compat.h"
           export CPPFLAGS="${CFLAGS}"
           export LDFLAGS="-pie"
@@ -403,7 +402,11 @@ jobs:
 
           rm -f config.cache
 
-          # Pass CC, CFLAGS natively into configure
+          # Pre-seed cross-compilation variables to prevent execution checks from failing (Exit 77)
+          ac_cv_prog_cc_works=yes \
+          ac_cv_prog_cxx_works=yes \
+          ac_cv_c_compiler_gnu=yes \
+          ac_cv_cxx_compiler_gnu=yes \
           ac_cv_func_logwtmp=no \
           ac_cv_lib_util_logwtmp=no \
           ac_cv_header_utmp_h=no \
